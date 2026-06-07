@@ -15,6 +15,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/multica-ai/multica/server/internal/util"
 	"github.com/resend/resend-go/v2"
 )
 
@@ -336,6 +337,9 @@ func (s *EmailService) SendVerificationCode(to, code string) error {
 		return s.sendSMTP(to, "Your Multica verification code", body)
 	}
 	if s.client == nil {
+		if util.IsHostedRuntime() {
+			return fmt.Errorf("RESEND_API_KEY is not configured")
+		}
 		fmt.Printf("[DEV] Verification code for %s: %s\n", to, code)
 		return nil
 	}

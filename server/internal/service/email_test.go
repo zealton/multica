@@ -199,6 +199,36 @@ func TestNewEmailService_EHLOName(t *testing.T) {
 	}
 }
 
+func TestSendVerificationCodeAllowsDevFallback(t *testing.T) {
+	t.Setenv("APP_ENV", "")
+	t.Setenv("VERCEL_ENV", "")
+	t.Setenv("RAILWAY_ENVIRONMENT_NAME", "")
+	t.Setenv("RESEND_API_KEY", "")
+	t.Setenv("SMTP_HOST", "")
+
+	svc := NewEmailService()
+	if err := svc.SendVerificationCode("dev@example.com", "123456"); err != nil {
+		t.Fatalf("expected dev fallback to succeed, got %v", err)
+	}
+}
+
+func TestSendVerificationCodeFailsWithoutProviderInHostedRuntime(t *testing.T) {
+	t.Setenv("APP_ENV", "")
+	t.Setenv("VERCEL_ENV", "")
+	t.Setenv("RAILWAY_ENVIRONMENT_NAME", "production")
+	t.Setenv("RESEND_API_KEY", "")
+	t.Setenv("SMTP_HOST", "")
+
+	svc := NewEmailService()
+	err := svc.SendVerificationCode("user@example.com", "123456")
+	if err == nil {
+		t.Fatal("expected hosted runtime without email provider to fail")
+	}
+	if err.Error() != "RESEND_API_KEY is not configured" {
+		t.Fatalf("expected missing api key error, got %v", err)
+	}
+}
+
 func TestBuildInvitationParams_EscapesHTMLInBody(t *testing.T) {
 	tests := []struct {
 		name          string
