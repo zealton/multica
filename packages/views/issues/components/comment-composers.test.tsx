@@ -46,6 +46,7 @@ vi.mock("../../editor", () => ({
     ref: Ref<unknown>,
   ) {
     const valueRef = useRef(defaultValue ?? "");
+    const activeUploadsRef = useRef(false);
 
     useImperativeHandle(ref, () => ({
       getMarkdown: () => valueRef.current,
@@ -55,12 +56,18 @@ vi.mock("../../editor", () => ({
       focus: () => {},
       blur: () => {},
       uploadFile: async (file: File) => {
+        activeUploadsRef.current = true;
+        onUpdate?.(valueRef.current);
         const result = await onUploadFile?.(file);
-        if (!result) return;
+        activeUploadsRef.current = false;
+        if (!result) {
+          onUpdate?.(valueRef.current);
+          return;
+        }
         valueRef.current = `${valueRef.current}\n${result.url}`.trim();
         onUpdate?.(valueRef.current);
       },
-      hasActiveUploads: () => false,
+      hasActiveUploads: () => activeUploadsRef.current,
     }));
 
     return (
@@ -117,6 +124,48 @@ function getSubmitButton(container: HTMLElement): HTMLButtonElement {
   const button = container.querySelectorAll("button")[1];
   if (!button) throw new Error("Expected submit button to render");
   return button;
+}
+
+function getFileInput(container: HTMLElement): HTMLInputElement {
+  const input = container.querySelector('input[type="file"]');
+  if (!(input instanceof HTMLInputElement)) {
+    throw new Error("Expected file input to render");
+  }
+  return input;
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+function makeUploadResult(overrides: Partial<UploadResult> = {}): UploadResult {
+  const url = overrides.url ?? "/uploads/workspaces/ws/att-1.png";
+  return {
+    id: "att-1",
+    workspace_id: "ws-1",
+    issue_id: "issue-1",
+    comment_id: null,
+    chat_session_id: null,
+    chat_message_id: null,
+    uploader_type: "member",
+    uploader_id: "user-1",
+    filename: "image.png",
+    url,
+    download_url: "/api/attachments/att-1/download",
+    markdown_url: url,
+    content_type: "image/png",
+    size_bytes: 12,
+    created_at: "2026-06-09T00:00:00Z",
+    link: url,
+    markdownLink: url,
+    ...overrides,
+  };
 }
 
 beforeEach(() => {
@@ -221,5 +270,77 @@ describe("comment composers", () => {
     await waitFor(() => expect(onSubmit).toHaveBeenCalled());
     // Failed send must NOT clear — the box still has content, submit stays live.
     await waitFor(() => expect(getSubmitButton(container)).not.toBeDisabled());
+  });
+
+  it("blocks main comment submission until image uploads finish", async () => {
+    const pending = deferred<UploadResult | null>();
+    uploadWithToast.mockReturnValueOnce(pending.promise);
+    const { container, onSubmit } = renderCommentInput();
+
+    fireEvent.change(screen.getByTestId("editor"), {
+      target: { value: "comment with evidence" },
+    });
+    fireEvent.change(getFileInput(container), {
+      target: {
+        files: [new File(["img"], "image.png", { type: "image/png" })],
+      },
+    });
+
+    await waitFor(() => {
+      expect(getSubmitButton(container)).toBeDisabled();
+    });
+    fireEvent.click(getSubmitButton(container));
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    pending.resolve(makeUploadResult());
+
+    await waitFor(() => {
+      expect(getSubmitButton(container)).not.toBeDisabled();
+    });
+    fireEvent.click(getSubmitButton(container));
+
+    await waitFor(() => {
+      expect(onSubmit).toHaveBeenCalledWith(
+        "comment with evidence\n/uploads/workspaces/ws/att-1.png",
+        ["att-1"],
+        undefined,
+      );
+    });
+  });
+
+  it("blocks reply submission until image uploads finish", async () => {
+    const pending = deferred<UploadResult | null>();
+    uploadWithToast.mockReturnValueOnce(pending.promise);
+    const { container, onSubmit } = renderReplyInput();
+
+    fireEvent.change(screen.getByTestId("editor"), {
+      target: { value: "reply with evidence" },
+    });
+    fireEvent.change(getFileInput(container), {
+      target: {
+        files: [new File(["img"], "image.png", { type: "image/png" })],
+      },
+    });
+
+    await waitFor(() => {
+      expect(getSubmitButton(container)).toBeDisabled();
+    });
+    fireEvent.click(getSubmitButton(container));
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    pending.resolve(makeUploadResult());
+
+    await waitFor(() => {
+      expect(getSubmitButton(container)).not.toBeDisabled();
+    });
+    fireEvent.click(getSubmitButton(container));
+
+    await waitFor(() => {
+      expect(onSubmit).toHaveBeenCalledWith(
+        "reply with evidence\n/uploads/workspaces/ws/att-1.png",
+        ["att-1"],
+        undefined,
+      );
+    });
   });
 });

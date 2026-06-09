@@ -65,12 +65,17 @@ function ReplyInput({
   const [submitting, setSubmitting] = useState(false);
   const [suppressedAgentIds, setSuppressedAgentIds] = useState<Set<string>>(() => new Set());
   const triggerPreview = useCommentTriggerPreview({ issueId, parentId, content });
+  const [hasActiveUploads, setHasActiveUploads] = useState(false);
   // Attachments uploaded in this composer session — see CommentInput for the
   // rationale (drives both submit-time attachment_ids and editor previews).
   const [pendingAttachments, setPendingAttachments] = useState<Attachment[]>([]);
   const { uploadWithToast } = useFileUpload(api);
+  const queueUpload = useCallback((file: File) => {
+    setHasActiveUploads(true);
+    editorRef.current?.uploadFile(file);
+  }, []);
   const { isDragOver, dropZoneProps } = useFileDropZone({
-    onDrop: (files) => files.forEach((f) => editorRef.current?.uploadFile(f)),
+    onDrop: (files) => files.forEach(queueUpload),
   });
 
   // Flush on tab close / mobile background — same rationale as CommentInput.
@@ -120,6 +125,10 @@ function ReplyInput({
 
   const handleSubmit = async () => {
     const content = editorRef.current?.getMarkdown()?.replace(/(\n\s*)+$/, "").trim();
+    if (editorRef.current?.hasActiveUploads()) {
+      setHasActiveUploads(true);
+      return;
+    }
     if (!content || submitting) return;
     // Track every attachment whose stable download URL OR legacy
     // storage URL is referenced in the markdown body. Both shapes
@@ -183,6 +192,7 @@ function ReplyInput({
             placeholder={placeholderText}
             onUpdate={(md) => {
               setContent(md);
+              setHasActiveUploads(editorRef.current?.hasActiveUploads() ?? false);
               setIsEmpty(!md.trim());
               if (draftKey) {
                 if (md.trim().length > 0) setDraft(draftKey, md);
@@ -209,16 +219,16 @@ function ReplyInput({
           <FileUploadButton
             size="sm"
             multiple
-            onSelect={(file) => editorRef.current?.uploadFile(file)}
+            onSelect={queueUpload}
           />
           <Button
             type="button"
             variant={isEmpty ? "ghost" : "default"}
             size="icon-xs"
-            disabled={isEmpty || submitting}
+            disabled={isEmpty || submitting || hasActiveUploads}
             onClick={handleSubmit}
           >
-            {submitting ? (
+            {submitting || hasActiveUploads ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
             ) : (
               <ArrowUp className="h-3.5 w-3.5" />
