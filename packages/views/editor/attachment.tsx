@@ -29,10 +29,10 @@ import {
   Maximize2,
   Trash2,
 } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { cn } from "@multica/ui/lib/utils";
 import { copyText } from "@multica/ui/lib/clipboard";
-import { useQuery } from "@tanstack/react-query";
 import { api } from "@multica/core/api";
 import { useConfigStore } from "@multica/core/config";
 import type { Attachment as AttachmentRecord } from "@multica/core/types";
@@ -108,7 +108,7 @@ interface Normalized {
 
 function normalize(
   input: AttachmentInput,
-  resolve: (url: string) => AttachmentRecord | undefined,
+  resolvedRecord: AttachmentRecord | undefined,
   cdnDomain: string,
   cdnSigned: boolean,
 ): Normalized {
@@ -124,7 +124,7 @@ function normalize(
       uploading: false,
     };
   }
-  const record = input.url ? resolve(input.url) : undefined;
+  const record = resolvedRecord;
   return {
     filename: input.filename || record?.filename || "",
     contentType: input.contentType || record?.content_type || "",
@@ -237,12 +237,16 @@ function absolutizeMediaURL(rawUrl: string): string {
 //     reports `cdn_signed` — in CloudFront signed-URL mode the same
 //     domain serves PRIVATE content and a raw (unsigned) storage URL is
 //     a guaranteed 403 (MUL-3254).
-//  3. `record.markdown_url` — the durable, server-policy-aligned URL.
+//  3. Site-relative `/uploads/...` `record.url` — local/self-host storage
+//     serves this path as a native-loadable public or signed resource. In
+//     Desktop, absolutizeMediaURL prefixes the API origin so file:// renderers
+//     do not resolve it locally.
+//  4. `record.markdown_url` — the durable, server-policy-aligned URL.
 //     Beats raw `record.url` because it never points at a private
 //     bucket (must-fix 2 from MUL-3192 review).
-//  4. `record.url` — legacy fallback for responses that omit
+//  5. `record.url` — legacy fallback for responses that omit
 //     `markdown_url` (a backend old enough to predate MUL-3192).
-//  5. The input URL — when there's no record at all.
+//  6. The input URL — when there's no record at all.
 function pickInlineMediaURL(
   record: AttachmentRecord,
   fallback: string,
@@ -257,9 +261,14 @@ function pickInlineMediaURL(
     return dl;
   }
   if (!cdnSigned && storageURLMatchesCdnDomain(record.url, cdnDomain)) return record.url;
+  if (isSiteRelativeUploadURL(record.url)) return record.url;
   if (record.markdown_url) return record.markdown_url;
   if (record.url) return record.url;
   return fallback;
+}
+
+function isSiteRelativeUploadURL(rawURL: string): boolean {
+  return rawURL.startsWith("/uploads/");
 }
 
 function storageURLMatchesCdnDomain(rawURL: string, cdnDomain: string): boolean {
@@ -367,8 +376,32 @@ export function Attachment({
   const cdnSigned = useConfigStore((s) => s.cdnSigned);
   const download = useDownloadAttachment();
   const preview = useAttachmentPreview();
+  const providerRecord =
+    attachment.kind === "url" && attachment.url
+      ? resolveAttachment(attachment.url)
+      : undefined;
+  const fallbackAttachmentId =
+    attachment.kind === "url" && !providerRecord && !attachment.uploading
+      ? attachmentIdFromDownloadURL(attachment.url)
+      : undefined;
+  const fallbackAttachment = useQuery({
+    queryKey: ["attachments", "metadata", fallbackAttachmentId],
+    queryFn: () => api.getAttachment(fallbackAttachmentId!),
+    enabled: !!fallbackAttachmentId,
+    staleTime: 30_000,
+    retry: false,
+  });
+  const fetchedRecord =
+    fallbackAttachment.data?.id === fallbackAttachmentId
+      ? fallbackAttachment.data
+      : undefined;
 
-  const state = normalize(attachment, resolveAttachment, cdnDomain, cdnSigned);
+  const state = normalize(
+    attachment,
+    attachment.kind === "url" ? providerRecord ?? fetchedRecord : undefined,
+    cdnDomain,
+    cdnSigned,
+  );
   // The picked URL may still be the auth-gated API endpoint (reopened drafts
   // whose persisted record has no signed download_url). Upgrade it to a
   // freshly signed URL on clients that can't load the endpoint natively.

@@ -26,8 +26,8 @@ const {
 
 vi.mock("@multica/core/api", () => ({
   api: {
-    getAttachmentTextContent: getAttachmentTextContentMock,
     getAttachment: getAttachmentMock,
+    getAttachmentTextContent: getAttachmentTextContentMock,
     getBaseUrl: getBaseUrlMock,
   },
   PreviewTooLargeError: class extends Error {},
@@ -293,6 +293,38 @@ describe("Attachment — image dispatch", () => {
     );
     expect(imageSrcs).toEqual([mediaUrl, mediaUrl]);
     expect(imageSrcs).not.toContain("");
+  });
+
+  it("fetches unresolved stable attachment URLs and renders the native-loadable local upload URL", async () => {
+    getBaseUrlMock.mockReturnValue("https://api.example.test");
+    const id = "11111111-2222-3333-4444-555555555555";
+    getAttachmentMock.mockResolvedValueOnce(
+      makeRecord({
+        id,
+        filename: "orphaned-description-image.jpg",
+        url: "/uploads/workspaces/ws-1/orphaned-description-image.jpg",
+        download_url: `/api/attachments/${id}/download`,
+        markdown_url: `https://api.example.test/api/attachments/${id}/download`,
+      }),
+    );
+
+    renderWithQuery(
+      <Attachment
+        attachment={{
+          kind: "url",
+          url: `/api/attachments/${id}/download`,
+          filename: "",
+          forceKind: "image",
+        }}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(getAttachmentMock).toHaveBeenCalledWith(id);
+      expect(document.querySelector("img")?.getAttribute("src")).toBe(
+        "https://api.example.test/uploads/workspaces/ws-1/orphaned-description-image.jpg",
+      );
+    });
   });
 
   it("does not pick the raw CDN url when the server reports cdn_signed (MUL-3254)", () => {
@@ -649,6 +681,20 @@ describe("Attachment — absolutize site-relative URLs (MUL-3192)", () => {
     const img = document.querySelector("img");
     expect(img?.getAttribute("src")).toBe(
       "https://api.example.test/uploads/ws-1/abc.png",
+    );
+  });
+
+  it("prefers a site-relative /uploads record URL over an API-shaped markdown_url in Desktop-like environments", () => {
+    getBaseUrlMock.mockReturnValue("https://api.example.test");
+    const att = makeRecord({
+      url: "/uploads/ws-1/current.png",
+      markdown_url: "https://api.example.test/api/attachments/att-1/download",
+      download_url: "/api/attachments/att-1/download",
+    });
+    renderWithQuery(<Attachment attachment={{ kind: "record", attachment: att }} />);
+    const img = document.querySelector("img");
+    expect(img?.getAttribute("src")).toBe(
+      "https://api.example.test/uploads/ws-1/current.png",
     );
   });
 
